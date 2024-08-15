@@ -1,0 +1,6 @@
+[submodule "test-mini"]
+	path = test-mini
+	url = https://github.com/Wallby/test-mini.git
+[submodule "window-mini"]
+	path = window-mini
+	url = https://github.com/Wallby/window-mini.git
