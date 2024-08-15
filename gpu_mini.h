@@ -86,7 +86,17 @@ struct gm_load_vkinstance_parameters_t
 		} hwnd;
 	} win32;
 #else //< #elif defined(__linux__)
-	//...
+	struct
+	{
+		struct
+		{
+			Display* a;
+		} display;
+		struct
+		{
+			Window a;
+		} window;
+	} xlib;
 #endif
 };
 

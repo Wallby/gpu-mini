@@ -1,5 +1,9 @@
 #include "gpu_mini.h"
 
+#include <string.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
 
 struct similarity_t
 {
@@ -685,35 +689,6 @@ static const VkBufferMemoryBarrier VK_BUFFER_MEMORY_BARRIER_DEFAULT = {
 
 //*****************************************************************************
 
-static int bIsVulkanLoaded = 0;
-
-struct vulkan_instance_t
-{
-	struct
-	{
-		VkInstance a;
-	} vkinstance;
-	struct
-	{
-		VkDebugUtilsMessengerEXT a;
-	} vkdebugutilsmessengerext;
-};
-static const struct vulkan_instance_t vulkan_instance_default = {
-		.vkinstance.a = VK_NULL_HANDLE,
-		.vkdebugutilsmessengerext.a = VK_NULL_HANDLE
-	};
-struct vulkan_t
-{
-	int flags;
-	int apiVersion;
-	struct vulkan_instance_t instance;
-};
-static const struct vulkan_t vulkan_default = {
-		.instance = vulkan_instance_default
-	};
-
-static struct vulkan_t vulkan = vulkan_default;
-
 enum
 {
 	EVulkanInstanceLayers_Validation = 0 //< "VK_LAYER_KHRONOS_validation"
@@ -738,6 +713,37 @@ static struct
 // NOTE: ^
 //       VkInstanceCreateInfo contains layers and extensions, not "layer per..
 //       .. extension" thus guaranteed that extension name is unique
+
+static int bIsVulkanLoaded = 0;
+
+struct vulkan_instance_t
+{
+	struct
+	{
+		VkInstance a;
+	} vkinstance;
+	struct
+	{
+		VkDebugUtilsMessengerEXT a;
+	} vkdebugutilsmessengerext;
+};
+static const struct vulkan_instance_t vulkan_instance_default = {
+		.vkinstance.a = VK_NULL_HANDLE,
+		.vkdebugutilsmessengerext.a = VK_NULL_HANDLE
+	};
+struct vulkan_t
+{
+	int flags;
+	int apiVersion;
+	struct vulkan_instance_t instance;
+	int bIsEnabledPerInstanceLayer[NUM_VULKAN_INSTANCE_LAYERS];
+	int bIsEnabledPerInstanceExtension[NUM_VULKAN_INSTANCE_EXTENSIONS];
+};
+static const struct vulkan_t vulkan_default = {
+		.instance = vulkan_instance_default
+	};
+
+static struct vulkan_t vulkan = vulkan_default;
 
 //*****************************************************************************
 
@@ -775,57 +781,48 @@ static uint32_t get_vulkan_api_version()
 //       returns 0 if failed
 // NOTE: if a == stderr.. print error if failed
 //       if a == stdout.. print warning if failed
-//       layerNamePer*Layer[..] may == NULL to indicate a gap
+//       requiredLayers[..] may == -1 to indicate a gap
+//       (*optionalLayers)[..] may == -1 to indicate a gap
 //       if succeeded.. will write to *numOptionalLayersAvailable
 // NOTE: no such as "instance layer" as "Since version 1.0.13 of the Vulkan..
 //       .. API specification [...] the Vulkan SDK device layers have been..
 //       .. deprecated"
 //       ^
 //       https://gpuopen.com/learn/using-the-vulkan-validation-layers/
-static int test_instance_layers(FILE* a, int numRequiredLayersTheresRoomFor, char** layerNamePerRequiredLayer, int numOptionalLayersTheresRoomFor, char** layerNamePerOptionalLayer, int* numOptionalLayersAvailable)
+static int test_instance_layers(FILE* a, int numRequiredLayersTheresRoomFor, int* requiredLayers, int numOptionalLayersTheresRoomFor, int** optionalLayers, int* numOptionalLayersAvailable)
 {
-	struct
-	{
-		FILE* a;
-	} file; //< "errormost" file
-	if(numRequiredLayersTheresRoomFor > 0)
-	{
-		file.a = a == stderr ? stderr : stdout;
-	}
-	else
-	{
-		file.a = stdout;
-	}
+	char* warningOrError = a == stderr ? "error" : "warning";
 	
 	uint32_t b;
 	if(vkEnumerateInstanceLayerProperties(&b, NULL) != VK_SUCCESS)
 	{
-		on_printf2(file.a, "%s: vkEnumerateInstanceLayerProperties != VK_SUCCESS in %s\n", file.a == stderr ? "error" : "warning", __FUNCTION__);
-		return file.a == stderr ? 0 : 1;
+		on_printf2(a, "%s: vkEnumerateInstanceLayerProperties != VK_SUCCESS in %s\n", warningOrError, __FUNCTION__);
+		return 0;
 	}
 	
 	VkLayerProperties c[b];
 	
 	if(vkEnumerateInstanceLayerProperties(&b, c) != VK_SUCCESS)
 	{
-		on_printf2(file.a, "%s: vkEnumerateInstanceLayerProperties != VK_SUCCESS in %s\n", file.a == stderr ? "error" : "warning", __FUNCTION__);
-		return file.a == stderr ? 0 : 1;
+		on_printf2(a, "%s: vkEnumerateInstanceLayerProperties != VK_SUCCESS in %s\n", warningOrError, __FUNCTION__);
+		return 0;
 	}
 	
 	int bIsAnyRequiredLayerNotAvailable = 0;
 	for(int i = 0; i < numRequiredLayersTheresRoomFor; ++i)
 	{
-		if(layerNamePerRequiredLayer[i] == NULL)
+		if(requiredLayers[i] == -1)
 		{
 			continue; //< ignore gap
 		}
 	
-		char* layerNameForRequiredLayer = layerNamePerRequiredLayer[i];
+		int layer = requiredLayers[i];
+		char* layerName = layerNamePerVulkanInstanceLayer[layer];
 
 		int bIsLayerAvailable = 0;
 		for(int j = 0; j < b; ++j)
 		{
-			if(strcmp(layerNameForRequiredLayer, c[j].layerName) == 0)
+			if(strcmp(layerName, c[j].layerName) == 0)
 			{
 				bIsLayerAvailable = 1;
 				break;
@@ -833,6 +830,10 @@ static int test_instance_layers(FILE* a, int numRequiredLayersTheresRoomFor, cha
 		}
 		if(bIsLayerAvailable == 0)
 		{
+			if(a == stderr)
+			{
+				on_printf2(stderr, "error: required instance layer %s missing in %s\n", layerName, __FUNCTION__);
+			}
 			return 0;
 		}
 	}
@@ -842,16 +843,18 @@ static int test_instance_layers(FILE* a, int numRequiredLayersTheresRoomFor, cha
 		int d = 0;
 		for(int i = 0; i < numOptionalLayersTheresRoomFor; ++i)
 		{
-			char* layerNameForOptionalLayer = layerNamePerOptionalLayer[i];
-			if(layerNameForOptionalLayer == NULL)
+			if((*optionalLayers)[i] == -1)
 			{
 				continue; //< ignore gap
 			}
 
+			int layer = (*optionalLayers)[i];
+			char* layerName = layerNamePerVulkanInstanceLayer[layer];
+
 			int bIsLayerAvailable = 0;
 			for(int j = 0; j < b; ++j)
 			{
-				if(strcmp(layerNameForOptionalLayer, c[j].layerName) == 0)
+				if(strcmp(layerName, c[j].layerName) == 0)
 				{
 					bIsLayerAvailable = 1;
 					++d;
@@ -862,7 +865,7 @@ static int test_instance_layers(FILE* a, int numRequiredLayersTheresRoomFor, cha
 
 			if(bIsLayerAvailable == 0)
 			{
-				layerNamePerOptionalLayer[i] = NULL;
+				(*optionalLayers)[i] = -1;
 			}
 		}
 		*numOptionalLayersAvailable = d;
@@ -879,6 +882,8 @@ static int test_instance_layers(FILE* a, int numRequiredLayersTheresRoomFor, cha
 // NOTE: assumes that layerName if any is tested
 static int test_instance_extension(FILE* a, char* layerName, char* extensionName)
 {
+	char* warningOrError = a == stderr ? "error" : "warning";
+
 	uint32_t b;
 	// "[If] pLayerName parameter is NULL, only extensions provided by..
 	// .. the Vulkan implementation or by implicitly enabled layers are..
@@ -887,7 +892,7 @@ static int test_instance_extension(FILE* a, char* layerName, char* extensionName
 	// v
 	if(vkEnumerateInstanceExtensionProperties(layerName, &b, NULL) != VK_SUCCESS)
 	{
-		on_printf2(a, "%s: vkEnumerateInstanceExtensionProperties != VK_SUCCESS in %s\n", a == stderr ? "error" : "warning", __FUNCTION__); 
+		on_printf2(a, "%s: vkEnumerateInstanceExtensionProperties != VK_SUCCESS in %s\n", warningOrError, __FUNCTION__); 
 		return 0;
 	}
 	
@@ -895,7 +900,7 @@ static int test_instance_extension(FILE* a, char* layerName, char* extensionName
 	
 	if(vkEnumerateInstanceExtensionProperties(layerName, &b, c) != VK_SUCCESS)
 	{
-		on_printf2(a, "%s: vkEnumerateInstanceExtensionProperties != VK_SUCCESS in %s\n", a == stderr ? "error" : "warning", __FUNCTION__);
+		on_printf2(a, "%s: vkEnumerateInstanceExtensionProperties != VK_SUCCESS in %s\n", warningOrError, __FUNCTION__);
 		return 0;
 	}
 	
@@ -913,57 +918,49 @@ static int test_instance_extension(FILE* a, char* layerName, char* extensionName
 struct test_instance_extensions_per_extension_t
 {
 	int layer;
-	char* extensionName;
+	int extension;
 };
 // NOTE: returns 1 if succeeded
 //       returns 0 if failed
 // NOTE: if a == stderr.. print error
 //       if a == stdout.. print warning
-//       perRequiredExtension[..].layerName may == -1 to indicate layerName == NULL
-//       perOptionalExtension[..].layerName may == -1 to indicate layerName == NULL
-//       perRequiredExtension[..].extensionName may == NULL to indicate a gap
-//       perOptionalExtension[..].extensionName may == NULL to indicate a gap
+//       requiredExtensions[..] may == -1 to indicate a gap
+//       (*optionalExtensions)[..] may == -1 to indicate a gap
 //       if succeeded..
 //       .. if an optional extension at index .. is not available will set..
-//          .. perOptionalExtension[..].extensionName == NULL
+//          .. optionalExtensions[..] == -1
 //       .. will write to *numOptionalExtensionsAvailable
 // NOTE: assumes that each layer if any is tested even for optional layer(s)..
 //       .. if any
-static int test_instance_extensions(FILE* a, int numRequiredExtensionsTheresRoomFor, struct test_instance_extensions_per_extension_t* perRequiredExtension, int numOptionalExtensionsTheresRoomFor, struct test_instance_extensions_per_extension_t* perOptionalExtension, int* numOptionalExtensionsAvailable)
+static int test_instance_extensions(FILE* a, int bIsAvailablePerInstanceLayer[NUM_VULKAN_INSTANCE_EXTENSIONS], int numRequiredExtensionsTheresRoomFor, int* requiredExtensions, int numOptionalExtensionsTheresRoomFor, int** optionalExtensions, int* numOptionalExtensionsAvailable)
 {
-	struct
-	{
-		FILE* a;
-	} file; //< "errormost" file
-	if(numRequiredExtensionsTheresRoomFor > 0)
-	{
-		file.a = a == stderr ? stderr : stdout;
-	}
-	else
-	{
-		file.a = stdout;
-	}
-
 	for(int i = 0; i < numRequiredExtensionsTheresRoomFor; ++i)
 	{
-		int layer = perRequiredExtension[i].layer;
-		char* layerName = layerNamePerVulkanInstanceLayer[layer];
-		char* extensionName = perRequiredExtension[i].extensionName;
-		if(extensionName == NULL)
+		if(requiredExtensions[i] == -1)
 		{
 			continue; //< ignore gap
 		}
-		
-		if(test_instance_extension(file.a, layerName, extensionName) == 0)
+
+		int extension = requiredExtensions[i];
+		char* extensionName = perVulkanInstanceExtension[extension].extensionName;
+
+		int layer = perVulkanInstanceExtension[extension].layer;
+		char* layerName = NULL;
+		if(layer != -1)
+		{
+			layerName = layerNamePerVulkanInstanceLayer[layer];
+		}
+
+		if(test_instance_extension(a, layerName, extensionName) == 0)
 		{
 			// only print warning about external library call, thus in..
 			// .. test_instance_extension..
 			// .. vkEnumerateInstanceExtensionProperties warning is fine,..
 			// .. but don't print warning about test_instance_extension fail
 			// v
-			if(file.a == stderr)
+			if(a == stderr)
 			{
-				on_printf2(stderr, "error: required instance extension %s is missing (layerName == %s) in %s\n", extensionName, layerName, __FUNCTION__);
+				on_printf2(stderr, "error: required instance extension %s is missing (layerName == %s) in %s\n", extensionName, layerName == NULL ? "NULL" : layerName, __FUNCTION__);
 			}
 			return 0;
 		}
@@ -974,19 +971,34 @@ static int test_instance_extensions(FILE* a, int numRequiredExtensionsTheresRoom
 		int b = 0;
 		for(int i = 0; i < numOptionalExtensionsTheresRoomFor; ++i)
 		{
-			int layer = perOptionalExtension[i].layer;
-			char* layerName = layerNamePerVulkanInstanceLayer[layer];
-			char* extensionName = perOptionalExtension[i].extensionName;
-			if(extensionName == NULL)
+			if((*optionalExtensions)[i] == -1)
 			{
 				continue; //< ignore gap
 			}
-			
+
+			int extension = (*optionalExtensions)[i];
+			char* extensionName = perVulkanInstanceExtension[extension].extensionName;
+
+			int layer = perVulkanInstanceExtension[extension].layer;
+			char* layerName = NULL;
+			if(layer != -1)
+			{
+				if(bIsAvailablePerInstanceLayer[layer] == 0)
+				{
+					// disable extension because requires layer that is not..
+					// .. available
+					(*optionalExtensions)[i] = -1;
+					continue;
+				}
+
+				layerName = layerNamePerVulkanInstanceLayer[layer];
+			}
+
 			//            optional instance extension should never print error
 			//                         v
 			if(test_instance_extension(stdout, layerName, extensionName) == 0)
 			{
-				perOptionalExtension[i].extensionName = NULL;
+				(*optionalExtensions)[i] = -1;
 				continue;
 			}
 			
@@ -1099,9 +1111,16 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 	
 	struct vulkan_instance_t instance = vulkan_instance_default;
 	
+	int bIsAvailablePerInstanceLayer[NUM_VULKAN_INSTANCE_LAYERS];
+	int bIsAvailablePerInstanceExtension[NUM_VULKAN_INSTANCE_EXTENSIONS];
+
 	int bSuccess = 1;
 	do
 	{
+		// any layers/extensions can be added here to these below variables
+		// adding an extension that requires a layer will automatically..
+		// .. require the layer (thus not required to manually add the layer..
+		// .. as well)
 		int numRequiredLayers = 0;
 		int* requiredLayers;
 		int numOptionalLayers = 0;
@@ -1130,7 +1149,10 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 			
 			add_or_append_element2(&numRequiredLayers, &requiredLayers, &layer);
 		}
-		
+		// ^
+		// add layer if any per required extension
+
+		// remove duplicate layer(s) if any..
 		int numUniqueRequiredLayers;
 		int indexPerUniqueRequiredLayer[numRequiredLayers];
 		//get_uniques2(NULL, numRequiredLayers, requiredLayers, &numUniqueRequiredLayers, &indexPerUniqueRequiredLayer);
@@ -1142,6 +1164,7 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 			uniqueRequiredLayers[i] = requiredLayers[indexPerUniqueRequiredLayer[i]];
 		}
 		
+		// add layer if any per optional extension..
 		for(int i = 0; i < numOptionalExtensions; ++i)
 		{
 			int extension = optionalExtensions[i];
@@ -1155,6 +1178,7 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 			add_or_append_element2(&numOptionalLayers, &optionalLayers, &layer);
 		}
 		
+		// remove duplicate layer(s) if any..
 		int numUniqueOptionalLayers;
 		int indexPerUniqueOptionalLayer[numOptionalLayers];
 		//get_uniques2(NULL, numOptionalLayers, optionalLayers, &numUniqueOptionalLayers, &indexPerUniqueOptionalLayer);
@@ -1165,86 +1189,129 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 		{
 			uniqueOptionalLayers[i] = optionalLayers[indexPerUniqueOptionalLayer[i]];
 		}
-		
-		char* layerNamePerUniqueRequiredLayer[numUniqueRequiredLayers];
+
+		int numOptionalLayersAvailable;
+		int* c = uniqueOptionalLayers; //< required as stack-array does not automatically create pointer as well?
+		//if(test_instance_layers(stderr, numUniqueRequiredLayers, uniqueRequiredLayers, numUniqueOptionalLayers, &uniqueOptionalLayers, &numOptionalLayersAvailable) == 0)
+		if(test_instance_layers(stderr, numUniqueRequiredLayers, uniqueRequiredLayers, numUniqueOptionalLayers, &c, &numOptionalLayersAvailable) == 0)
+		{
+			break;
+		}
+
+		// sort (move_to_back) available optional layers
+		int availableOptionalLayers[numUniqueOptionalLayers];
+		memcpy(availableOptionalLayers, uniqueOptionalLayers, sizeof(int) * numUniqueOptionalLayers);
+		int* d = availableOptionalLayers;
+		int e = -1; //< query for move_to_back
+		int f;
+		move_to_back2(NULL, numUniqueOptionalLayers, &d, &e, &f);
+
+		// bIsAvailablePerInstanceLayer for vulkan_t..
+		for(int i = 0; i < NUM_VULKAN_INSTANCE_LAYERS; ++i)
+		{
+			bIsAvailablePerInstanceLayer[i] = 0;
+		}
 		for(int i = 0; i < numUniqueRequiredLayers; ++i)
 		{
-			layerNamePerUniqueRequiredLayer[i] = layerNamePerVulkanInstanceLayer[uniqueRequiredLayers[i]];
+			if(uniqueRequiredLayers[i] == -1)
+			{
+				continue;
+			}
+
+			int layer = uniqueRequiredLayers[i];
+			bIsAvailablePerInstanceLayer[layer] = 1;
 		}
-		
-		char* layerNamePerUniqueOptionalLayer[numUniqueOptionalLayers];
-		for(int i = 0; i < numUniqueOptionalLayers; ++i)
+		for(int i = 0; i < numOptionalLayersAvailable; ++i)
 		{
-			layerNamePerUniqueOptionalLayer[i] = layerNamePerVulkanInstanceLayer[uniqueOptionalLayers[i]];
+			// availableOptionalLayers is sorted hence layer cannot "== -1..
+			// .. here"
+			int layer = availableOptionalLayers[i];
+			bIsAvailablePerInstanceLayer[layer] = 1;
 		}
-		
-		int numOptionalLayersAvailable;
-		//if(test_instance_layers(stderr, numUniqueRequiredLayers, layerNamePerUniqueRequiredLayer, numUniqueOptionalLayers, &layerNamePerUniqueOptionalLayer, &numOptionalLayersAvailable) == 0)
-		if(test_instance_layers(stderr, numUniqueRequiredLayers, layerNamePerUniqueRequiredLayer, numUniqueOptionalLayers, layerNamePerUniqueOptionalLayer, &numOptionalLayersAvailable) == 0)
-		{
-			break;
-		}
-		
-		char* layerNamePerAvailableOptionalLayer[numUniqueOptionalLayers];
-		memcpy(layerNamePerAvailableOptionalLayer, layerNamePerUniqueOptionalLayer, sizeof(char*) * numUniqueOptionalLayers);
-		int c;
-		char* d = NULL; //< query for move_to_back
-		//move_to_back2(NULL, numOptionalLayersAvailable, layerNamePerAvailableOptionalLayer, &d, &c);
-		char** e = layerNamePerAvailableOptionalLayer;
-		move_to_back2(NULL, numOptionalLayersAvailable, &e, &d, &c);
-		
+
+		// numLayers and layerNamePerLayer for passing to VkCreateInstance..
+		// .. via vkInstanceCreateInfo
 		int numLayers = numUniqueRequiredLayers + numOptionalLayersAvailable;
 		char* layerNamePerLayer[numLayers];
-		int f = 0;
-		memcpy(layerNamePerLayer, layerNamePerUniqueRequiredLayer, sizeof(char*) * numUniqueRequiredLayers);
-		f += numUniqueRequiredLayers;
-		memcpy(layerNamePerLayer + f, layerNamePerAvailableOptionalLayer, sizeof(char*) * numOptionalLayersAvailable);
+		int g = 0;
+		for(int i = 0; i < numUniqueRequiredLayers; ++i)
+		{
+			if(uniqueRequiredLayers[i] == -1)
+			{
+				continue;
+			}
+
+			int layer = uniqueRequiredLayers[i];
+			layerNamePerLayer[i] = layerNamePerVulkanInstanceLayer[layer];
+		}
+		g += numUniqueRequiredLayers;
+		for(int i = 0; i < numOptionalLayersAvailable; ++i)
+		{
+			int layer = availableOptionalLayers[i];
+			layerNamePerLayer[g + i] = layerNamePerVulkanInstanceLayer[layer];
+		}
+		//g += numOptionalLayersAvailable;
 		
 		// test instance extensions
-		struct test_instance_extensions_per_extension_t perRequiredExtension[numRequiredExtensions];
-		for(int i = 0; i < numRequiredExtensions; ++i)
-		{
-			int extension = requiredExtensions[i];
-		
-			perRequiredExtension[i].layer = perVulkanInstanceExtension[extension].layer;
-			perRequiredExtension[i].extensionName = perVulkanInstanceExtension[extension].extensionName;
-		}
-		
-		struct test_instance_extensions_per_extension_t perOptionalExtension[numOptionalExtensions];
-		for(int i = 0; i < numOptionalExtensions; ++i)
-		{
-			int extension = optionalExtensions[i];
-			
-			perOptionalExtension[i].layer = perVulkanInstanceExtension[extension].layer;
-			perOptionalExtension[i].extensionName = perVulkanInstanceExtension[extension].extensionName;
-		}
-		
 		int numOptionalExtensionsAvailable;
-		if(test_instance_extensions(stderr, numRequiredExtensions, perRequiredExtension, numOptionalExtensions, perOptionalExtension, &numOptionalExtensionsAvailable) != 1)
+		if(test_instance_extensions(stderr, bIsAvailablePerInstanceLayer, numRequiredExtensions, requiredExtensions, numOptionalExtensions, &optionalExtensions, &numOptionalExtensionsAvailable) != 1)
 		{
 			break;
 		}
-		
-		char* extensionNamePerAvailableOptionalExtension[numOptionalExtensions];
-		for(int i = 0; i < numOptionalExtensions; ++i)
+
+		// sort (move_to_back) available optional extensions
+		int availableOptionalExtensions[numOptionalExtensions];
+		memcpy(availableOptionalExtensions, optionalExtensions, sizeof(int) * numOptionalExtensions);
+		int* h = availableOptionalExtensions;
+		int k = -1; //< query for move_to_back
+		int l;
+		move_to_back2(NULL, numOptionalExtensions, &h, &k, &l);
+
+		// bIsAvailablePerInstanceExtension for vulkan_t..
+		for(int i = 0; i < NUM_VULKAN_INSTANCE_EXTENSIONS; ++i)
 		{
-			extensionNamePerAvailableOptionalExtension[i] = perOptionalExtension[i].extensionName;
+			bIsAvailablePerInstanceExtension[i] = 0;
 		}
-		int g;
-		char* h = NULL; //< query for move_to_back
-		//move_to_back2(NULL, numOptionalExtensions, &extensionNamePerAvailableOptionalExtension, &h, &g);
-		char** k = extensionNamePerAvailableOptionalExtension;
-		move_to_back2(NULL, numOptionalExtensions, &k, &h, &g);
-		
-		int numExtensions = numRequiredExtensions + numOptionalExtensionsAvailable;
-		char* extensionNamePerExtension[numExtensions];
-		int l = 0;
 		for(int i = 0; i < numRequiredExtensions; ++i)
 		{
-			extensionNamePerExtension[i] = perRequiredExtension[i].extensionName;
+			if(requiredExtensions[i] == -1)
+			{
+				continue;
+			}
+
+			int extension = requiredExtensions[i];
+			bIsAvailablePerInstanceExtension[extension] = 1;
 		}
-		l += numRequiredExtensions;
-		memcpy(extensionNamePerExtension + l, extensionNamePerAvailableOptionalExtension, sizeof(char*) * numOptionalExtensionsAvailable);
+		for(int i = 0; i < numOptionalExtensionsAvailable; ++i)
+		{
+			// availableOptionalExtensions is sorted hence extension cannot..
+			// .. "== -1 here"
+			int extension = availableOptionalExtensions[i];
+			bIsAvailablePerInstanceExtension[extension] = 1;
+		}
+
+		// numExtensions and extensionNamePerExtension for passing to..
+		// .. VkCreateInstance via vkInstanceCreateInfo
+		int numExtensions = numRequiredExtensions + numOptionalExtensionsAvailable;
+		char* extensionNamePerExtension[numExtensions];
+		int m = 0;
+		for(int i = 0; i < numRequiredExtensions; ++i)
+		{
+			if(requiredExtensions[i] == -1)
+			{
+				continue;
+			}
+
+			int extension = requiredExtensions[i];
+			extensionNamePerExtension[i] = perVulkanInstanceExtension[extension].extensionName;
+		}
+		m += numRequiredExtensions;
+		for(int i = 0; i < numOptionalExtensionsAvailable; ++i)
+		{
+			int extension = availableOptionalExtensions[i];
+			extensionNamePerExtension[m + i] = perVulkanInstanceExtension[extension].extensionName;
+		}
+		//m += numOptionalExtensionsAvailable;
 		
 		// create instance
 		struct
@@ -1263,41 +1330,34 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 		
 		vkinstancecreateinfo.a = VK_INSTANCE_CREATE_INFO_DEFAULT;
 		vkinstancecreateinfo.a.pApplicationInfo = &vkapplicationinfo.a;
+		printf("numLayers %i\n", numLayers);
 		if(numLayers > 0)
 		{
-			/*
-			printf("numLayers %i\n", numLayers);
 			for(int i = 0; i < numLayers; ++i)
 			{
 				printf("layerNamePerLayer[%i] %s\n", i, layerNamePerLayer[i]);
 			}
-			*/
 		
 			vkinstancecreateinfo.a.enabledLayerCount = numLayers;
 			//vkinstancecreateinfo.a.ppEnabledLayerNames = layerNamePerLayer;
 			vkinstancecreateinfo.a.ppEnabledLayerNames = (const char* const*)layerNamePerLayer;
 		}
+		printf("numExtensions %i\n", numExtensions);
 		if(numExtensions > 0)
 		{
-			/*
-			printf("numExtensions %i\n", numExtensions);
 			for(int i = 0; i < numExtensions; ++i)
 			{
 				printf("extensionNamePerExtension[%i] %s\n", i, extensionNamePerExtension[i]);
 			}
-			*/
 		
 			vkinstancecreateinfo.a.enabledExtensionCount = numExtensions;
 			//vkinstancecreateinfo.a.ppEnabledExtensionNames = extensionNamePerExtensions;
 			vkinstancecreateinfo.a.ppEnabledExtensionNames = (const char* const*)extensionNamePerExtension;
 		}
 
-		VkStructure* m = (VkStructure*)&vkinstancecreateinfo.a;
+		VkStructure* n = (VkStructure*)&vkinstancecreateinfo.a;
 
-		// TODO: set vulkan.numLayers and vulkan.numExtensions, which will..
-		//       .. allow for the below..
-		//int bIsVkkhrdebugutilsExtensionEnabled = is_in2(NULL, numExtensions, extensions, &EVulkanInstanceExtension_Vkkhrdebugutils);
-		int bIsVkkhrdebugutilsExtensionEnabled = is_in2(predicate$char$, numExtensions, extensionNamePerExtension, &perVulkanInstanceExtension[EVulkanInstanceExtension_Vkkhrdebugutils].extensionName);
+		int bIsVkkhrdebugutilsExtensionAvailable = bIsAvailablePerInstanceExtension[EVulkanInstanceExtension_Vkkhrdebugutils];
 		// ^
 		// suffixed with Extension as seems to be no "guarantee that a layer..
 		// .. and extension cannot both have the same name"?
@@ -1306,15 +1366,15 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 		{
 			VkDebugUtilsMessengerCreateInfoEXT a;
 		} vkdebugutilsmessengercreateinfoext;
-		if(bIsVkkhrdebugutilsExtensionEnabled == 1)
+		if(bIsVkkhrdebugutilsExtensionAvailable == 1)
 		{
 			vkdebugutilsmessengercreateinfoext.a = VK_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT_DEFAULT;
 			vkdebugutilsmessengercreateinfoext.a.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 			vkdebugutilsmessengercreateinfoext.a.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 			vkdebugutilsmessengercreateinfoext.a.pfnUserCallback = &myVkDebugUtilsMessengerCallbackEXT;
 
-			m->pNext = &vkdebugutilsmessengercreateinfoext.a;
-			m = (VkStructure*)&vkdebugutilsmessengercreateinfoext.a;
+			n->pNext = &vkdebugutilsmessengercreateinfoext.a;
+			n = (VkStructure*)&vkdebugutilsmessengercreateinfoext.a;
 		}
 
 		if(vkCreateInstance(&vkinstancecreateinfo.a, NULL, &instance.vkinstance.a) != VK_SUCCESS)
@@ -1326,7 +1386,7 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 		}
 
 		// instance extensions is still part of instance
-		if(bIsVkkhrdebugutilsExtensionEnabled == 1)
+		if(bIsVkkhrdebugutilsExtensionAvailable == 1)
 		{
 			PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance.vkinstance.a, "vkCreateDebugUtilsMessengerEXT");
 			if(vkCreateDebugUtilsMessengerEXT == NULL)
@@ -1361,6 +1421,8 @@ int gm_load_vkinstance(struct gm_load_vkinstance_parameters_t* parameters)
 	
 	//vulkan.instance = instance;
 	memcpy(&vulkan.instance, &instance, sizeof(struct vulkan_instance_t));
+	memcpy(vulkan.bIsEnabledPerInstanceLayer, bIsAvailablePerInstanceLayer, sizeof(int) * NUM_VULKAN_INSTANCE_LAYERS);
+	memcpy(vulkan.bIsEnabledPerInstanceExtension, bIsAvailablePerInstanceExtension, sizeof(int) * NUM_VULKAN_INSTANCE_EXTENSIONS);
 	
 	return 1;
 }

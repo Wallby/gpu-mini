@@ -76,7 +76,8 @@ int main(int argc, char** argv)
 		loadVkinstanceParameters.win32.hinstance.a = infoAboutWindowMini.win32.hinstance.a;
 		loadVkinstanceParameters.win32.hwnd.a = infoAboutWindow.win32.hwnd.a;
 #else //< #elif defined(__linux__)
-		//...
+		loadVkinstanceParameters.xlib.display.a = infoAboutWindowMini.xlib.display.a;
+		loadVkinstanceParameters.xlib.window.a = infoAboutWindow.xlib.window.a;
 #endif
 		if(gm_load_vkinstance(&loadVkinstanceParameters) != 1)
 		{

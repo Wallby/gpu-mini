@@ -8,24 +8,26 @@ $(call mm_add_library_parameters_t,b)
 b.filetypes:=EMMLibraryfiletype_Static
 b.c:=gpu_mini.c
 b.h:=gpu_mini.h
-ifndef OS #< linux
-else #< windows
+ifeq ($(MM_OS),windows)
 b.hFolders:=$(VULKAN_SDK)/Include/
+else #< else ifeq ($(MM_OS),chromeos)
+#...
 endif
 $(call mm_add_library,gpu-mini,b)
 
 $(call mm_add_executable_parameters_t,c)
 c.c:=test.c
-#c.libraries:=gpu-mini :window-mini
+#c.libraries:=gpu-mini window-mini:
 c.libraries:=gpu-mini
 c.hFolders:=../window-mini/
 c.libFolders:=../window-mini/
 c.lib:=window-mini
-ifndef OS #< linux
-else #< windows
+ifeq ($(MM_OS),windows)
 c.hFolders+=$(VULKAN_SDK)/Include/
 c.libFolders+=$(VULKAN_SDK)/Lib/
 c.lib+=gdi32 vulkan-1
+else #< else ifeq ($(MM_OS),chromeos)
+c.lib+=X11 vulkan
 endif
 $(call mm_add_executable,test,c)
 
