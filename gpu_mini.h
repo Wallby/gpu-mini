@@ -1,6 +1,8 @@
 #ifndef GPU_MINI_H
 #define GPU_MINI_H
 
+#define GPU_MINI_VERSION 0.1
+
 #include <stdio.h>
 
 /*
