@@ -5,6 +5,43 @@
 #include <stdarg.h>
 
 
+static void get_hresult_to_string(HRESULT a, int* b, char* c)
+{
+	char* d;
+	// NOTE: FORMAT_MESSAGE_MAX_WIDTH_MASK such that "[FormatMessageA]..
+	//       .. ignores regular line breaks in the message definition..
+	//       .. text"
+	//       ^
+	//       https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-formatmessagea
+	// NOTE: currently assuming US English is always available (I have no..
+	//       .. proof whether or not this is so)
+	//       v
+	if(FormatMessageA(FORMAT_MESSAGE_MAX_WIDTH_MASK | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER, NULL, a, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), (LPSTR)&d, 0, NULL) != 0)
+	{
+		if(c == NULL)
+		{
+			*b = strlen(d) + 1;
+		}
+		else
+		{
+			strncpy(c, d, *b);
+		}
+		LocalFree(d);
+	}
+	else
+	{
+		if(c == NULL)
+		{
+			// https://stackoverflow.com/questions/29087129/how-to-calculate-the-length-of-output-that-sprintf-will-generate
+			*b = snprintf(NULL, 0, "%u", a) + 1;
+		}
+		else
+		{
+			snprintf(c, *b, "%u", a);
+		}
+	}
+}
+
 struct similarity_t
 {
 	int index1;
@@ -1480,3 +1517,251 @@ int gm_get_info_about_vulkan(struct gm_info_about_vulkan_t* infoAboutVulkan)
 	
 	return 1;
 }
+
+//*****************************************************************************
+//                                  directx11
+//*****************************************************************************
+
+#define IUNKNOWN_RELEASE(a) IUnknown_Release((IUnknown*)a)
+
+D3D_FEATURE_LEVEL D3D_FEATURE_LEVELS[] = {
+	D3D_FEATURE_LEVEL_9_1,
+	D3D_FEATURE_LEVEL_9_2,
+	D3D_FEATURE_LEVEL_9_3,
+	D3D_FEATURE_LEVEL_10_0,
+	D3D_FEATURE_LEVEL_10_1,
+	D3D_FEATURE_LEVEL_11_0,
+	D3D_FEATURE_LEVEL_11_1
+};
+
+#define D3D_FEATURE_LEVELS_LENGTH (sizeof D3D_FEATURE_LEVELS / sizeof *D3D_FEATURE_LEVELS)
+
+//*****************************************************************************
+
+static int bIsDirectx11Loaded = 0;
+
+struct directx11_t
+{
+	struct
+	{
+		ID3D11Device* a;
+	} id3d11device;
+	struct
+	{
+		ID3D11DeviceContext* a;
+	} id3d11devicecontext;
+};
+static const struct directx11_t directx11_default = {
+		//...
+	};
+
+static struct directx11_t directx11 = directx11_default;
+
+//*****************************************************************************
+
+extern size_t numBytesAllocated;
+
+static void unload_directx11(int progress, struct directx11_t* a);
+enum
+{
+	ELoadDirectx11Progress_CreateDXGIFactory = 1,
+	ELoadDirectx11Progress_Idxgiadapter,
+	ELoadDirectx11Progress_D3D11CreateDevice
+};
+#define ELoadDirectx11Progress_All ELoadDirectx11Progress_D3D11CreateDevice
+int gm_load_directx11(struct gm_load_directx11_parameters_t* parameters)
+{
+	if(bIsDirectx11Loaded == 1)
+	{
+		return -1;
+	}
+
+	struct
+	{
+		HRESULT a;
+	} hresult;
+
+	struct
+	{
+		IDXGIFactory6* a;
+	} idxgifactory6;
+
+	struct
+	{
+		IDXGIAdapter* a;
+	} idxgiadapter;
+	
+	struct
+	{
+		ID3D11Device* a;
+	} id3d11device;
+
+	struct
+	{
+		ID3D11DeviceContext* a;
+	} id3d11devicecontext;
+
+	int progress = 0;
+
+	do
+	{
+		// idxgifactory..
+		hresult.a = CreateDXGIFactory(&IID_IDXGIFactory6, (void**)&idxgifactory6.a);
+		if(FAILED(hresult.a))
+		{
+			if(on_print != NULL)
+			{
+				int a;
+				get_hresult_to_string(hresult.a, &a, NULL);
+				char b[a];
+				get_hresult_to_string(hresult.a, &a, b);
+
+				on_printf(stderr, "error: %s in %s\n", b, __FUNCTION__);
+			}
+			break;
+		}
+		progress = ELoadDirectx11Progress_CreateDXGIFactory;
+
+		int numAdapters;
+		for(numAdapters = 0; DXGI_ERROR_NOT_FOUND != IDXGIFactory6_EnumAdapterByGpuPreference(idxgifactory6.a, numAdapters, parameters->gpuPreference, &IID_IDXGIAdapter, (void**)&idxgiadapter.a); ++numAdapters)
+		{
+			IUNKNOWN_RELEASE(idxgiadapter.a);
+		}
+		if(numAdapters == 0)
+		{
+			on_printf2(stderr, "error: no adapters found in %s\n", __FUNCTION__);
+			break;
+		}
+
+		//printf("numAdapters is %i\n", numAdapters);
+
+		//IDXGIAdapter* adapters[numAdapters];
+		for(int i = 0; i < numAdapters; ++i)
+		{
+			IDXGIFactory6_EnumAdapterByGpuPreference(idxgifactory6.a, i, parameters->gpuPreference, &IID_IDXGIAdapter, (void**)&idxgiadapter.a);
+
+			int numOutputs;
+			struct
+			{
+				IDXGIOutput* a;
+			} idxgioutput;
+			//printf("i is %i\n", i);
+			for(numOutputs = 0; DXGI_ERROR_NOT_FOUND != IDXGIAdapter_EnumOutputs(idxgiadapter.a, numOutputs, &idxgioutput.a); ++numOutputs)
+			{
+				IUNKNOWN_RELEASE(idxgioutput.a);
+			}
+			//printf("numOutputs is %i\n", numOutputs);
+			
+			/*
+			if(numOutputs == 0)
+			{
+				adapters[i] = NULL;
+			}
+			*/
+			if(numOutputs > 0)
+			{
+				break;
+			}
+			if(i == numAdapters - 1)
+			{
+				idxgiadapter.a = NULL;
+			}
+		}
+		if(idxgiadapter.a == NULL)
+		{
+			on_printf2(stderr, "error: no output on any adapter in %s\n", __FUNCTION__);
+			break;
+		}
+		progress = ELoadDirectx11Progress_Idxgiadapter;
+
+		// id3d11device and id3d11devicecontext..
+		D3D_FEATURE_LEVEL* featureLevels;
+		int numFeatureLevels;
+
+		int indexToMinFeatureLevel = -1;
+		D3D_FEATURE_LEVEL minFeatureLevel;
+		for(int i = 0; i < D3D_FEATURE_LEVELS_LENGTH; ++i)
+		{
+			if(parameters->minFeatureLevel == D3D_FEATURE_LEVELS[i])
+			{
+				featureLevels = &D3D_FEATURE_LEVELS[i];
+				indexToMinFeatureLevel = i;
+			}
+			if(parameters->maxFeatureLevel == D3D_FEATURE_LEVELS[i])
+			{
+				numFeatureLevels = 1 + (i - indexToMinFeatureLevel);
+			}
+		}
+
+		struct
+		{
+			DXGI_ADAPTER_DESC a;
+		} dxgiadapterdesc;
+		IDXGIAdapter_GetDesc(idxgiadapter.a, &dxgiadapterdesc.a);
+		on_printf(stdout, "Adapter %ls chosen in %s\n", dxgiadapterdesc.a.Description, __FUNCTION__);
+
+		UINT flags = 0;
+		if((parameters->flags & EGMLoadDirectx11ParametersFlag_Safety) != 0)
+		{
+			flags |= D3D11_CREATE_DEVICE_DEBUG;
+		}
+		hresult.a = D3D11CreateDevice(idxgiadapter.a, D3D_DRIVER_TYPE_UNKNOWN, NULL, flags, featureLevels, numFeatureLevels, D3D11_SDK_VERSION, &id3d11device.a, NULL, &id3d11devicecontext.a);
+		if(FAILED(hresult.a))
+		{
+			if(on_print != NULL)
+			{
+				int a;
+				get_hresult_to_string(hresult.a, &a, NULL);
+				char b[a];
+				get_hresult_to_string(hresult.a, &a, b);
+
+				on_printf(stderr, "error: %s in %s\n", b, __FUNCTION__);
+			}
+			break;
+		}
+		progress = ELoadDirectx11Progress_D3D11CreateDevice;
+	} while(0);
+	// always release..
+	if(progress >= ELoadDirectx11Progress_Idxgiadapter)
+	{
+		IUNKNOWN_RELEASE(idxgiadapter.a);
+	}
+	if(progress >= ELoadDirectx11Progress_CreateDXGIFactory)
+	{
+		IUNKNOWN_RELEASE(idxgifactory6.a);
+	}
+	// only release if failed..
+	if(progress < ELoadDirectx11Progress_All)
+	{
+		struct directx11_t a;
+		a.id3d11device.a = id3d11device.a;
+		a.id3d11devicecontext.a = id3d11devicecontext.a;
+		unload_directx11(progress, &a);
+
+		return 0;
+	}
+
+	directx11.id3d11device.a = id3d11device.a;
+	directx11.id3d11devicecontext.a = id3d11devicecontext.a;
+
+	return 1;
+}
+static void unload_directx11(int progress, struct directx11_t* a)
+{
+	if(progress >= ELoadDirectx11Progress_D3D11CreateDevice)
+	{
+		IUNKNOWN_RELEASE(a->id3d11devicecontext.a);
+		IUNKNOWN_RELEASE(a->id3d11device.a);
+	}
+}
+int gm_unload_directx11()
+{
+	if(bIsDirectx11Loaded == 0)
+	{
+		return -1;
+	}
+
+	unload_directx11(ELoadDirectx11Progress_All, &directx11);
+
+	return 1;
+};

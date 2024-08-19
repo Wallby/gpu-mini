@@ -3,20 +3,23 @@
 
 #include <stdio.h>
 
-/*
 #if defined(_WIN32)
-#include <windows.h>
-#else
-//...
-#endif
-*/
+#define COBJMACROS //< because vulkan.h includes windows.h, has to be defined here
+//#define WIDL_C_INLINE_WRAPPERS
 
-#if defined(_WIN32)
 #define VK_USE_PLATFORM_WIN32_KHR
 #else //< elif defined(__linux__)
 #define VK_USE_PLATFORM_XLIB_KHR
 #endif
 #include <vulkan/vulkan.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <dxgi1_6.h>
+#include <d3d11.h>
+#else //< #elif defined(__linux__)
+//...
+#endif
 
 
 //void(*on_print)(char* a, FILE* b);
@@ -106,6 +109,63 @@ int gm_unload_vkinstance();
 //int gm_load_vkdevice(struct gm_load_vkdevice_parameters_t* parameters);
 //int gm_unload_vkdevice();
 
+//*****************************************************************************
+//                                   opengl
+//*****************************************************************************
+
 //int gm_load_opengl
+
+#ifdef _WIN32
+//*****************************************************************************
+//                                 directx 12
+//*****************************************************************************
+
+//int gm_load_directx12
+
+//*****************************************************************************
+//                                 directx 11
+//*****************************************************************************
+
+struct gm_info_about_directx11_t
+{
+	D3D_FEATURE_LEVEL featureLevel;
+	struct
+	{
+		ID3D11Device* a;
+	} id3d11device;
+	struct
+	{
+		ID3D11DeviceContext* a;
+	} id3d11devicecontext;
+};
+
+enum
+{
+	EGMLoadDirectx11ParametersFlag_Safety = 1
+};
+
+struct gm_load_directx11_parameters_t
+{
+	int flags;
+	DXGI_GPU_PREFERENCE gpuPreference;
+	D3D_FEATURE_LEVEL minFeatureLevel;
+	D3D_FEATURE_LEVEL maxFeatureLevel;
+};
+static const struct gm_load_directx11_parameters_t gm_load_directx11_parameters_default = {
+#ifdef GM_SAFETY
+		.flags = EGMLoadDirectx11ParametersFlag_Safety,
+#else
+		.flags = 0,
+#endif
+		.gpuPreference = DXGI_GPU_PREFERENCE_UNSPECIFIED,
+		.minFeatureLevel = D3D_FEATURE_LEVEL_9_1,
+		.maxFeatureLevel = D3D_FEATURE_LEVEL_11_1
+	};
+
+int gm_load_directx11(struct gm_load_directx11_parameters_t* parameters);
+int gm_unload_directx11();
+
+int gm_get_info_about_directx11(struct gm_info_about_directx11_t* infoAboutDirectx11);
+#endif
 
 #endif

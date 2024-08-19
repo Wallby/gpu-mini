@@ -17,18 +17,19 @@ $(call mm_add_library,gpu-mini,b)
 
 $(call mm_add_executable_parameters_t,c)
 c.c:=test.c
-#c.libraries:=gpu-mini window-mini:
+#c.libraries:=gpu-mini window-mini: test-mini: clock-mini:
 c.libraries:=gpu-mini
-c.hFolders:=../window-mini/
-c.libFolders:=../window-mini/
-c.lib:=window-mini
+c.hFolders:=../window-mini/ ../test-mini/ ../clock-mini/
+c.libFolders:=../window-mini/ ../test-mini/
+c.lib:=window-mini test-mini
 ifeq ($(MM_OS),windows)
 c.hFolders+=$(VULKAN_SDK)/Include/
 c.libFolders+=$(VULKAN_SDK)/Lib/
-c.lib+=gdi32 vulkan-1
+c.lib+=uuid dxguid d3d11 dxgi gdi32 vulkan-1
 else #< else ifeq ($(MM_OS),chromeos)
 c.lib+=X11 vulkan
 endif
+c.gccOrG++:=-Wl,--wrap=malloc,--wrap=free,--wrap=main
 $(call mm_add_executable,test,c)
 
 $(call mm_add_test_parameters_t,d)

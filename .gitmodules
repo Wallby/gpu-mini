@@ -4,3 +4,6 @@
 [submodule "window-mini"]
 	path = window-mini
 	url = https://github.com/Wallby/window-mini.git
+[submodule "clock-mini"]
+	path = clock-mini
+	url = https://github.com/Wallby/clock-mini.git
