@@ -69,9 +69,19 @@ int test_1()
 		while(b - a < 0.5f)
 		{
 			wm_poll();
+			if(bQuit == 1)
+			{
+				break;
+			}
 
 			b = cm_get_seconds();
 		}
+		/*
+		if(bQuit == 1)
+		{
+			break;
+		}
+		*/
 	} while(0);
 	if(progress >= ETest1Progress_LoadedVkinstance)
 	{
@@ -84,6 +94,11 @@ int test_1()
 
 	if(progress < ETest1Progress_All)
 	{
+		return 0;
+	}
+	if(bQuit == 1)
+	{
+		fputs("error: window was closed during test\n", stderr);
 		return 0;
 	}
 
@@ -113,9 +128,19 @@ int test_2()
 		while(b - a < 0.5f)
 		{
 			wm_poll();
+			if(bQuit == 1)
+			{
+				break;
+			}
 
 			b = cm_get_seconds();
 		}
+		/*
+		if(bQuit == 1)
+		{
+			break;
+		}
+		*/
 	} while(0);
 	if(progress >= ETest2Progress_LoadedDirectx11)
 	{
@@ -124,6 +149,11 @@ int test_2()
 
 	if(progress < ETest2Progress_All)
 	{
+		return 0;
+	}
+	if(bQuit == 1)
+	{
+		fputs("error: window was closed during test\n", stderr);
 		return 0;
 	}
 
@@ -173,7 +203,7 @@ int main(int argc, char** argv)
 
 		gm_set_on_print(&on_print);
 		
-		//TM_TEST2(1);
+		TM_TEST2(1);
 		TM_TEST2(2);
 		
 		gm_unset_on_print();
